@@ -36,7 +36,7 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
                   int close_log) {
     // 从配置管理器获取日志可见级别
     try {
-        std::string levelStr = ConfigManager::Instance().getLogVisibleLevel();
+        std::string levelStr = ConfigManager::Instance().get<std::string>("log.visible_level", "debug");
         if (levelStr == "debug") {
             m_visible_log_level_ = LogLevel::DEBUG;
         } else if (levelStr == "info") {

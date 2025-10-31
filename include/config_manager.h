@@ -4,9 +4,10 @@
 #include <json/json.h>
 #include <string>
 #include <mutex>
-#include <optional>
-#include <filesystem>
-#include <variant>
+#include <type_traits>
+#include <iostream>
+#include <sstream>
+#include <vector>
 
 constexpr const char* default_config_path = "conf/server.json";
 
@@ -20,37 +21,50 @@ public:
     // 重置配置管理器状态
     void reset();
 
-    // MySQL 配置项获取
-    std::string getMySQLHost() const;
-    std::string getMySQLUser() const;
-    std::string getMySQLPassword() const;
-    std::string getMySQLDatabase() const;
-    unsigned int getMySQLPort() const;
-    unsigned int getMySQLPoolSize() const;
+    // 模板化的 get 方法，用于获取任意类型的配置项
+    template<typename T>
+    T get(const std::string& key, const T& defaultValue) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Json::Value val = resolvePath(config_, key);
 
-    // HTTP服务器配置项获取
-    unsigned int getServerPort() const;
-    unsigned int getWorkerThreads() const;
-    unsigned int getMaxConnections() const;
-    std::string getDocumentRoot() const;
-    unsigned int getTimeoutMs() const;
+        if (val.isNull()) {
+            return defaultValue;
+        }
 
-    // 日志配置项获取
-    std::string getLogLevel() const;
-    std::string getLogVisibleLevel() const;
-    bool getLogAsync() const;
-    std::string getLogPath() const;
-    bool getLogToConsole() const;
-    bool getLogToFile() const;
-    unsigned int getLogFlushInterval() const;
-    unsigned int getLogRollSize() const;
+        try {
+            if constexpr (std::is_same<T, std::string>::value) {
+                return val.asString();
+            } else if constexpr (std::is_integral<T>::value && std::is_signed<T>::value) {
+                return static_cast<T>(val.asInt64());
+            } else if constexpr (std::is_integral<T>::value && std::is_unsigned<T>::value) {
+                return static_cast<T>(val.asUInt64());
+            } else if constexpr (std::is_floating_point<T>::value) {
+                return static_cast<T>(val.asDouble());
+            } else if constexpr (std::is_same<T, bool>::value) {
+                return val.asBool();
+            }
+        } catch (const Json::Exception& e) {
+            // 类型转换失败时返回默认值
+            std::cerr << "ConfigManager::get type conversion error for key '" << key << "': " << e.what() << std::endl;
+            return defaultValue;
+        }
+        
+        return defaultValue;
+    }
 
-    // 获取任意配置项（高级用法）
-    using ConfigValue = std::variant<std::string, int, unsigned int, bool, double>;
-    ConfigValue get(const std::string& key) const;
+    // 模板化的 set 方法，用于设置配置项
+    template<typename T>
+    void set(const std::string& key, const T& value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        Json::Value* target = &resolvePath(config_, key, true);
+        *target = value;
+    }
     
-    // 新增：将当前配置保存到文件
+    // 将当前配置保存到文件
     bool saveConfig(const std::string& path) const;
+
+    // 检查配置项是否存在
+    bool has(const std::string& key) const;
 
 private:
     ConfigManager();
@@ -58,12 +72,15 @@ private:
     ConfigManager(const ConfigManager&) = delete;
     ConfigManager& operator=(const ConfigManager&) = delete;
 
-    // 加载并验证配置
+    // 加载配置
     bool loadConfig(const std::string& path);
-    // 创建默认配置
-    void createDefaultConfig(const std::string& path);
-    // 验证配置完整性
-    bool validateConfig();
+
+    // 辅助函数，用于解析点分隔的路径
+    Json::Value& resolvePath(Json::Value& root, const std::string& path, bool create = false) const;
+    const Json::Value& resolvePath(const Json::Value& root, const std::string& path) const;
+
+    // 分割路径字符串
+    std::vector<std::string> splitPath(const std::string& path) const;
 
     Json::Value config_;
     mutable std::mutex mutex_;

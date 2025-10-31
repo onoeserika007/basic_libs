@@ -17,6 +17,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <format>
+#include <sys/time.h>
 
 // 简易自旋锁（基于C++20 std::atomic_flag，轻量无锁竞争）
 class SpinLock {

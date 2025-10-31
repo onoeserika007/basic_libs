@@ -1,6 +1,8 @@
 #include "config_manager.h"
 #include "logger.h"
 #include <fstream>
+#include <vector>
+#include <sstream>
 
 ConfigManager& ConfigManager::Instance() {
     static ConfigManager instance;
@@ -13,7 +15,10 @@ ConfigManager::ConfigManager() {
     if (!initialized_) {
         // 尝试加载默认配置文件
         if (loadConfig(config_path_)) {
-            validateConfig();
+            initialized_ = true;
+        } else {
+            // 如果默认配置文件不存在，创建空配置对象
+            config_ = Json::Value(Json::objectValue);
             initialized_ = true;
         }
     }
@@ -30,13 +35,8 @@ bool ConfigManager::init(const std::string& config_path) {
     config_path_ = config_path;
     
     if (!loadConfig(config_path)) {
-        LOG_ERROR("Failed to load config file: {:s}", config_path);
-        return false;
-    }
-
-    if (!validateConfig()) {
-        LOG_ERROR("Config validation failed");
-        return false;
+        LOG_WARN("Failed to load config file: {:s}, using empty configuration", config_path);
+        config_ = Json::Value(Json::objectValue);
     }
 
     initialized_ = true;
@@ -52,13 +52,8 @@ void ConfigManager::reset() {
 bool ConfigManager::loadConfig(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        LOG_INFO("Config file not found, creating default config at: {:s}", path);
-        createDefaultConfig(path);
-        file.open(path);
-        if (!file.is_open()) {
-            LOG_ERROR("Failed to create default config file: {:s}", path);
-            return false;
-        }
+        LOG_INFO("Config file not found: {:s}", path);
+        return false;
     }
 
     Json::CharReaderBuilder builder;
@@ -79,191 +74,6 @@ bool ConfigManager::loadConfig(const std::string& path) {
     return true;
 }
 
-void ConfigManager::createDefaultConfig(const std::string& path) {
-    Json::Value root;
-
-    // MySQL配置
-    root["mysql"]["host"] = "localhost";
-    root["mysql"]["port"] = 3306;
-    root["mysql"]["user"] = "webserver";
-    root["mysql"]["password"] = "password";
-    root["mysql"]["database"] = "webserver";
-    root["mysql"]["pool_size"] = 8;
-    root["mysql"]["connect_timeout"] = 10;
-    root["mysql"]["read_timeout"] = 30;
-    root["mysql"]["write_timeout"] = 30;
-
-    // HTTP服务器配置
-    root["server"]["port"] = 8080;
-    root["server"]["worker_threads"] = 4;
-    root["server"]["max_connections"] = 10000;
-    root["server"]["document_root"] = "root";
-    root["server"]["timeout_ms"] = 10000;
-
-    // 日志配置
-    root["log"]["level"] = "info";
-    root["log"]["visible_level"] = "info";
-    root["log"]["async"] = true;
-    root["log"]["path"] = "logs";
-    root["log"]["to_console"] = true;
-    root["log"]["to_file"] = true;
-    root["log"]["flush_interval"] = 3; // seconds
-    root["log"]["roll_size"] = 5000000;
-
-    Json::StreamWriterBuilder writer;
-    writer["commentStyle"] = "None";
-    writer["indentation"] = "    ";
-    std::unique_ptr<Json::StreamWriter> streamWriter(writer.newStreamWriter());
-
-    std::ofstream file(path);
-    if (file.is_open()) {
-        streamWriter->write(root, &file);
-        file.close();
-    }
-}
-
-bool ConfigManager::validateConfig() {
-    // 检查必需的配置项
-    const char* requiredFields[] = {
-        "mysql.host", "mysql.port", "mysql.user", "mysql.password", "mysql.database",
-        "mysql.pool_size", "server.port", "server.worker_threads", 
-        "server.max_connections", "server.document_root", "log.path",
-        "log.to_console", "log.to_file", "log.flush_interval"
-    };
-
-    for (const auto& field : requiredFields) {
-        Json::Value val = Json::Path(field).resolve(config_);
-        if (val.isNull()) {
-            // 此时log有可能未初始化完成
-            std::cerr << "Missing required config field: " << field << std::endl;
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// MySQL 配置项获取
-std::string ConfigManager::getMySQLHost() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["host"].asString();
-}
-
-std::string ConfigManager::getMySQLUser() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["user"].asString();
-}
-
-std::string ConfigManager::getMySQLPassword() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["password"].asString();
-}
-
-std::string ConfigManager::getMySQLDatabase() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["database"].asString();
-}
-
-unsigned int ConfigManager::getMySQLPort() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["port"].asUInt();
-}
-
-unsigned int ConfigManager::getMySQLPoolSize() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["mysql"]["pool_size"].asUInt();
-}
-
-// HTTP服务器配置项获取
-unsigned int ConfigManager::getServerPort() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["server"]["port"].asUInt();
-}
-
-unsigned int ConfigManager::getWorkerThreads() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["server"]["worker_threads"].asUInt();
-}
-
-unsigned int ConfigManager::getMaxConnections() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["server"]["max_connections"].asUInt();
-}
-
-std::string ConfigManager::getDocumentRoot() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["server"]["document_root"].asString();
-}
-
-unsigned int ConfigManager::getTimeoutMs() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["server"]["timeout_ms"].asUInt();
-}
-
-// 日志配置项获取
-std::string ConfigManager::getLogLevel() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["level"].asString();
-}
-
-std::string ConfigManager::getLogVisibleLevel() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["visible_level"].asString();
-}
-
-bool ConfigManager::getLogAsync() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["async"].asBool();
-}
-
-std::string ConfigManager::getLogPath() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["path"].asString();
-}
-
-bool ConfigManager::getLogToConsole() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["to_console"].asBool();
-}
-
-bool ConfigManager::getLogToFile() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["to_file"].asBool();
-}
-
-unsigned int ConfigManager::getLogFlushInterval() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["flush_interval"].asUInt();
-}
-
-unsigned int ConfigManager::getLogRollSize() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return config_["log"]["roll_size"].asUInt();
-}
-
-ConfigManager::ConfigValue ConfigManager::get(const std::string& key) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    Json::Value val = Json::Path(key).resolve(config_);
-    if (val.isNull()) {
-        return std::string();
-    }
-
-    switch (val.type()) {
-        case Json::stringValue:
-            return val.asString();
-        case Json::intValue:
-            return val.asInt();
-        case Json::uintValue:
-            return val.asUInt();
-        case Json::booleanValue:
-            return val.asBool();
-        case Json::realValue:
-            return val.asDouble();
-        default:
-            return std::string();
-    }
-}
-
 bool ConfigManager::saveConfig(const std::string& path) const {
     std::lock_guard<std::mutex> lock(mutex_);
     
@@ -281,4 +91,88 @@ bool ConfigManager::saveConfig(const std::string& path) const {
     streamWriter->write(config_, &file);
     file.close();
     return true;
+}
+
+bool ConfigManager::has(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Json::Value& val = resolvePath(config_, key);
+    return !val.isNull();
+}
+
+std::vector<std::string> ConfigManager::splitPath(const std::string& path) const {
+    std::vector<std::string> parts;
+    std::string current;
+    
+    for (char c : path) {
+        if (c == '.') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    
+    if (!current.empty()) {
+        parts.push_back(current);
+    }
+    
+    return parts;
+}
+
+Json::Value& ConfigManager::resolvePath(Json::Value& root, const std::string& path, bool create) const {
+    if (path.empty()) {
+        return root;
+    }
+    
+    auto parts = splitPath(path);
+    Json::Value* current = &root;
+    
+    for (const auto& part : parts) {
+        if (current->isNull()) {
+            if (create) {
+                *current = Json::Value(Json::objectValue);
+            } else {
+                static Json::Value nullValue;
+                return nullValue;
+            }
+        }
+        
+        if (!current->isObject()) {
+            if (create) {
+                *current = Json::Value(Json::objectValue);
+            } else {
+                static Json::Value nullValue;
+                return nullValue;
+            }
+        }
+        
+        if (create && !current->isMember(part)) {
+            (*current)[part] = Json::Value();
+        }
+        
+        current = &(*current)[part];
+    }
+    
+    return *current;
+}
+
+const Json::Value& ConfigManager::resolvePath(const Json::Value& root, const std::string& path) const {
+    if (path.empty()) {
+        return root;
+    }
+    
+    auto parts = splitPath(path);
+    const Json::Value* current = &root;
+    
+    for (const auto& part : parts) {
+        if (current->isNull() || !current->isObject() || !current->isMember(part)) {
+            static Json::Value nullValue;
+            return nullValue;
+        }
+        current = &(*current)[part];
+    }
+    
+    return *current;
 }

@@ -1,12 +1,10 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.10)
+project(base_lib)
 
-# 必须放在 project() 之前
-# Set compilers before project()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-project(serika_base_lib)
-
+# 添加jsoncpp作为子目录
 add_subdirectory(third_party/jsoncpp)
 
 # 获取源文件目录的绝对路径
