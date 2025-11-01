@@ -44,12 +44,6 @@ public:
     // 获取单例
     static Logger &Instance();
 
-    // 初始化：file_name (base name), async: 是否异步, max_queue_size: 异步队列长度(0 表示同步),
-    // buf_size: 单条消息最大缓冲, rotate_bytes: 文件大小上限（0表示不按大小分割），close_log: 是否关闭日志输出（0:
-    // 启用）
-    bool Init(std::string file_name, bool async = true, size_t max_queue_size = 10000, size_t buf_size = 8192,
-              size_t rotate_bytes = 50 * 1024 * 1024, int close_log = 0);
-
     // 写日志（与经典API兼容，format采用printf样式）
     template<typename... Args>
     void Log(LogLevel level, const char *fmt, Args &&...args);
@@ -70,11 +64,20 @@ private:
     Logger();
     ~Logger();
 
+    // 初始化：file_name (base name), async: 是否异步, max_queue_size: 异步队列长度(0 表示同步),
+    // buf_size: 单条消息最大缓冲, rotate_bytes: 文件大小上限（0表示不按大小分割），close_log: 是否关闭日志输出（0: 启用）
+    // 改为private，强制使用配置文件
+    bool Init(std::string file_name, bool async = true, size_t max_queue_size = 10000, size_t buf_size = 8192,
+              size_t rotate_bytes = 50 * 1024 * 1024);
+
+    // 从配置文件自动初始化
+    void InitFromConfig();
+
     // 后台线程主函数
     void WorkerThread();
 
     // 将格式化的日志写入文件（只由后台线程或同步路径调用，外部应加锁或保证单线程）
-    void WriteToFile(const std::string &msg);
+    void Write(const std::string &msg);
 
     // 检查是否需要切分文件（按天或按大小）
     void RotateIfNeeded();
@@ -91,6 +94,7 @@ private:
     size_t m_buf_size_;
     size_t m_rotate_bytes_;
     int m_close_log_;
+    bool to_file_;
     bool m_realtime_ = true;
     LogLevel m_visible_log_level_; // 日志可见级别
 
@@ -116,10 +120,19 @@ private:
     std::mutex m_file_mutex_;
     std::string m_batch_buf_; // 批量写入缓冲区
     size_t m_batch_flush_threshold_; // 缓冲区阈值（超阈值则刷盘）
+    
+    // 初始化控制
+    std::atomic<bool> m_initialized_{false};
+    std::mutex m_init_mutex_;
 };
 
 template<typename... Args>
 void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
+    // 检查是否已初始化，未初始化则自动从配置文件初始化
+    if (!m_initialized_.load(std::memory_order_acquire)) {
+        InitFromConfig();
+    }
+
     if (m_close_log_)
         return;
 
@@ -153,7 +166,7 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
         }
     } else {
         // 同步模式：直接写入
-        WriteToFile(final_msg);
+        Write(final_msg);
     }
 }
 

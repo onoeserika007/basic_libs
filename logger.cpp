@@ -27,13 +27,75 @@ Logger::Logger() :
     m_file_stream_(nullptr), // Replaces FILE* with RAII-managed ofstream
     m_written_bytes_(0), m_today_(0), m_max_queue_size_(0), m_running_(false), m_is_async_(true),
     m_output_stream_(nullptr), // Unified interface for file/stderr output
-    m_batch_flush_threshold_(4096) // 4 KB
+    m_batch_flush_threshold_(4096), // 4 KB
+    m_initialized_(false)
 {}
 
 Logger::~Logger() { Shutdown(); }
 
-bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size_t buf_size, size_t rotate_bytes,
-                  int close_log) {
+bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size_t buf_size, size_t rotate_bytes) {
+    m_base_name_ = std::move(file_name);
+    m_is_async_ = async;
+    m_max_queue_size_ = max_queue_size;
+    m_buf_size_ = buf_size;
+    m_rotate_bytes_ = rotate_bytes;
+
+    if (to_file_) {
+        // open file
+        std::lock_guard<std::mutex> lk(m_file_mutex_);
+        // compute initial name
+        struct timeval tv;
+        gettimeofday(&tv, nullptr);
+        time_t tt = tv.tv_sec;
+        struct tm tm_now;
+        localtime_r(&tt, &tm_now); // Replaced localtime with thread-safe localtime_r (POSIX)
+        m_today_ = tm_now.tm_mday;
+
+        std::string fname = GenerateLogFileName();
+        // Initialize file stream with append mode (replaces fopen("a"))
+        m_file_stream_ = std::make_unique<std::ofstream>(fname, std::ios::app | std::ios::binary);
+        if (!m_file_stream_->is_open()) {
+            // fallback to stderr
+            fprintf(stderr, "Logger: failed to open log file %s, fallback to stderr\n", fname.c_str());
+            m_output_stream_ = &std::cerr;
+        } else {
+            // Get current file size (replaces fseek + ftell)
+            m_file_stream_->seekp(0, std::ios::end);
+            m_written_bytes_ = static_cast<size_t>(m_file_stream_->tellp());
+            if (m_written_bytes_ == static_cast<size_t>(-1))
+                m_written_bytes_ = 0;
+            m_output_stream_ = m_file_stream_.get();
+            std::cout << "Logger: successfully opened log file " << fname << std::endl;
+        }
+        m_current_name_ = fname;
+    }
+
+    if (m_is_async_ && m_max_queue_size_ > 0) {
+        m_running_.store(true);
+        m_worker_ = std::thread(&Logger::WorkerThread, this);
+    } else {
+        m_is_async_ = false;
+    }
+    return true;
+}
+
+void Logger::InitFromConfig() {
+    std::lock_guard<std::mutex> lock(m_init_mutex_);
+    
+    // 双重检查锁定
+    if (m_initialized_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    auto&& config_manager = ConfigManager::Instance();
+    // 从配置文件读取日志配置
+    std::string log_path = config_manager.get<std::string>("log.path", "log");
+    bool async = config_manager.get<bool>("log.async", true);
+    int flush_interval = config_manager.get<int>("log.flush_interval", 3);
+    size_t roll_size = config_manager.get<size_t>("log.roll_size", 5000000);
+    bool to_console = config_manager.get<bool>("log.to_console", true);
+    bool to_file = config_manager.get<bool>("log.to_file", true);
+
     // 从配置管理器获取日志可见级别
     try {
         std::string levelStr = ConfigManager::Instance().get<std::string>("log.visible_level", "debug");
@@ -54,49 +116,10 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
         m_visible_log_level_ = LogLevel::DEBUG;
     }
 
-    m_base_name_ = std::move(file_name);
-    m_is_async_ = async;
-    m_max_queue_size_ = max_queue_size;
-    m_buf_size_ = buf_size;
-    m_rotate_bytes_ = rotate_bytes;
-    m_close_log_ = close_log;
-
-    // open file
-    std::lock_guard<std::mutex> lk(m_file_mutex_);
-    // compute initial name
-    struct timeval tv;
-    gettimeofday(&tv, nullptr);
-    time_t tt = tv.tv_sec;
-    struct tm tm_now;
-    localtime_r(&tt, &tm_now); // Replaced localtime with thread-safe localtime_r (POSIX)
-    m_today_ = tm_now.tm_mday;
-
-    std::string fname = GenerateLogFileName();
-    // Initialize file stream with append mode (replaces fopen("a"))
-    m_file_stream_ = std::make_unique<std::ofstream>(fname, std::ios::app | std::ios::binary);
-    if (!m_file_stream_->is_open()) {
-        // fallback to stderr
-        fprintf(stderr, "Logger: failed to open log file %s, fallback to stderr\n", fname.c_str());
-        m_output_stream_ = &std::cerr;
-    } else {
-        // Get current file size (replaces fseek + ftell)
-        m_file_stream_->seekp(0, std::ios::end);
-        m_written_bytes_ = static_cast<size_t>(m_file_stream_->tellp());
-        if (m_written_bytes_ == static_cast<size_t>(-1))
-            m_written_bytes_ = 0;
-        m_output_stream_ = m_file_stream_.get();
-        std::cout << "Logger: successfully opened log file " << fname << std::endl;
-    }
-
-    m_current_name_ = fname;
-
-    if (m_is_async_ && m_max_queue_size_ > 0) {
-        m_running_.store(true);
-        m_worker_ = std::thread(&Logger::WorkerThread, this);
-    } else {
-        m_is_async_ = false;
-    }
-    return true;
+    Init(log_path, async, 10000, 8192, roll_size);
+    
+    // 设置初始化完成标志
+    m_initialized_.store(true, std::memory_order_release);
 }
 
 void Logger::Shutdown() {
@@ -216,10 +239,8 @@ void Logger::RotateIfNeeded() {
     m_written_bytes_ = 0;
 }
 
-void Logger::WriteToFile(const std::string &msg) {
+void Logger::Write(const std::string &msg) {
     std::lock_guard<std::mutex> lk(m_file_mutex_);
-    if (!m_output_stream_)
-        return;
 
     // 日志追加到批量缓冲区
     m_batch_buf_ += msg;
@@ -230,7 +251,7 @@ void Logger::WriteToFile(const std::string &msg) {
 
         // write to file
         // 写入文件
-        if (m_file_stream_ && m_file_stream_->is_open()) {
+        if (to_file_ && m_file_stream_ && m_file_stream_->is_open()) {
             m_file_stream_->write(m_batch_buf_.data(), m_batch_buf_.size());
             if (m_file_stream_->good()) {
                 m_written_bytes_ += m_batch_buf_.size();
@@ -268,7 +289,7 @@ void Logger::WorkerThread() {
         // 批量写入文件（复用批量刷盘逻辑）
         if (!batch_msgs.empty()) {
             for (const auto &msg: batch_msgs) {
-                WriteToFile(msg);
+                Write(msg);
             }
         } else {
             // 无日志时yield CPU，减少空转消耗
@@ -283,7 +304,7 @@ void Logger::WorkerThread() {
         while (!m_queue_.empty()) {
             remaining_msg = std::move(m_queue_.front());
             m_queue_.pop_front();
-            WriteToFile(remaining_msg);
+            Write(remaining_msg);
         }
     }
 }
