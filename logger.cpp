@@ -134,13 +134,7 @@ void Logger::Shutdown() {
     // 刷空批量缓冲区
     std::lock_guard<std::mutex> lk(m_file_mutex_);
     if (!m_batch_buf_.empty() && m_output_stream_) {
-        m_output_stream_->write(m_batch_buf_.data(), m_batch_buf_.size());
-        m_written_bytes_ += m_batch_buf_.size();
-        // 确保缓冲区被刷新
-        if (m_file_stream_ && m_file_stream_->is_open()) {
-            m_file_stream_->flush();
-        }
-        m_batch_buf_.clear();
+        Write("");
     }
 
     // 关闭文件流
@@ -196,6 +190,9 @@ std::string Logger::GenerateLogFileName() {
 }
 
 void Logger::RotateIfNeeded() {
+    if (!to_file_) {
+        return;
+    }
     struct timeval tv {};
     gettimeofday(&tv, nullptr);
     time_t tt = tv.tv_sec;

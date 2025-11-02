@@ -5,6 +5,7 @@
 #ifndef LOGGER_H
 #define LOGGER_H
 
+#include <assert.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -140,8 +141,16 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
         return;
     }
 
+    std::string formatted_msg;
     // 2.1 可变参数格式化（C++20 std::vformat）
-    std::string formatted_msg = std::vformat(fmt, std::make_format_args(args...));
+    // try {
+    //     formatted_msg = std::vformat(fmt, std::make_format_args(args...));
+    // } catch (std::format_error & e) {
+    //     // LOG ERROR
+    //     // assert(false && "Unexpected error.");
+    // }
+
+    formatted_msg = std::vformat(fmt, std::make_format_args(args...));
 
     // 拼接最终日志（时间前缀+格式化内容+换行）
     struct timeval tv;

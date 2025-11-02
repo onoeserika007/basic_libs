@@ -27,15 +27,14 @@ ConfigManager::ConfigManager() {
 bool ConfigManager::init(const std::string& config_path) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (initialized_) {
-        LOG_WARN("ConfigManager already initialized");
-        // 如果已经初始化，先重置状态
+        std::cout << "ConfigManager already initialized" << std::endl;
         reset();
     }
 
     config_path_ = config_path;
     
     if (!loadConfig(config_path)) {
-        LOG_WARN("Failed to load config file: {:s}, using empty configuration", config_path);
+        std::cerr << "Failed to load config file: " << config_path << ", using empty configuration" << std::endl;
         config_ = Json::Value(Json::objectValue);
     }
 
@@ -52,7 +51,7 @@ void ConfigManager::reset() {
 bool ConfigManager::loadConfig(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        LOG_INFO("Config file not found: {:s}", path);
+        std::cerr << "Config file not found: " << path << std::endl;
         return false;
     }
 
@@ -67,7 +66,7 @@ bool ConfigManager::loadConfig(const std::string& path) {
     delete reader;
 
     if (!success) {
-        LOG_ERROR("Failed to parse config file: {:s}", errors);
+        std::cerr << "Failed to parse config file: " << errors << std::endl;
         return false;
     }
 
@@ -84,7 +83,7 @@ bool ConfigManager::saveConfig(const std::string& path) const {
 
     std::ofstream file(path);
     if (!file.is_open()) {
-        LOG_ERROR("Failed to open file for writing: {:s}", path);
+        std::cerr << "Failed to open file for writing: " << path << std::endl;
         return false;
     }
 
