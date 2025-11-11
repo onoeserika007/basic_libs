@@ -42,7 +42,7 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
 
     if (to_file_) {
         // open file
-        std::lock_guard<std::mutex> lk(m_file_mutex_);
+        std::lock_guard lk(m_file_mutex_);
         // compute initial name
         struct timeval tv;
         gettimeofday(&tv, nullptr);
@@ -79,7 +79,7 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
 }
 
 void Logger::InitFromConfig() {
-    std::lock_guard<std::mutex> lock(m_init_mutex_);
+    std::lock_guard lock(m_init_mutex_);
     
     // 双重检查锁定
     if (m_initialized_.load(std::memory_order_acquire)) {
@@ -134,7 +134,7 @@ void Logger::Shutdown() {
     }
 
     // 刷空批量缓冲区
-    std::lock_guard<std::mutex> lk(m_file_mutex_);
+    std::lock_guard lk(m_file_mutex_);
     if (!m_batch_buf_.empty() && m_output_stream_) {
         Write("");
     }
@@ -245,7 +245,7 @@ void Logger::RotateIfNeeded() {
 }
 
 void Logger::Write(const std::string &msg) {
-    std::lock_guard<std::mutex> lk(m_file_mutex_);
+    std::lock_guard lk(m_file_mutex_);
 
     // 日志追加到批量缓冲区
     m_batch_buf_ += msg;
@@ -286,7 +286,7 @@ void Logger::WorkerThread() {
 
         // 批量出队（自旋锁保护，减少锁竞争次数）
         {
-            std::lock_guard<SpinLock> lk(m_queue_lock_);
+            std::lock_guard lk(m_queue_lock_);
             while (!m_queue_.empty() && batch_msgs.size() < 32) {
                 batch_msgs.emplace_back(std::move(m_queue_.front()));
                 m_queue_.pop_front();
@@ -307,7 +307,7 @@ void Logger::WorkerThread() {
     // 线程退出前刷空队列剩余日志
     std::string remaining_msg;
     {
-        std::lock_guard<SpinLock> lk(m_queue_lock_);
+        std::lock_guard lk(m_queue_lock_);
         while (!m_queue_.empty()) {
             remaining_msg = std::move(m_queue_.front());
             m_queue_.pop_front();

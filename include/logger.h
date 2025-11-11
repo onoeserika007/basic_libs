@@ -165,7 +165,7 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
         // 队列满时自旋等待（匹配原逻辑）
         while (true) {
             {
-                std::lock_guard<SpinLock> lk(m_queue_lock_);
+                std::lock_guard lk(m_queue_lock_);
                 if (m_queue_.size() < m_max_queue_size_) {
                     m_queue_.emplace_back(std::move(final_msg));
                     break;
