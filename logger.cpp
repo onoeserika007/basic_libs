@@ -40,6 +40,8 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
     m_buf_size_ = buf_size;
     m_rotate_bytes_ = rotate_bytes;
 
+    m_queue_ptr_ = std::make_unique<LockFreeQueue<std::string>>(max_queue_size);
+
     if (to_file_) {
         // open file
         std::lock_guard lk(m_file_mutex_);
@@ -94,6 +96,10 @@ void Logger::InitFromConfig() {
     size_t roll_size = config_manager.get<size_t>("log.roll_size", 5000000);
     bool to_console = config_manager.get<bool>("log.to_console", true);
     bool to_file = config_manager.get<bool>("log.to_file", true);
+    int max_queue_size = config_manager.get<int>("log.max_queue_size", 160000);
+
+    to_file_ = to_file;
+    to_console_ = to_console;
 
     to_file_ = to_file;
     to_console_ = to_console;
@@ -118,7 +124,7 @@ void Logger::InitFromConfig() {
         m_visible_log_level_ = LogLevel::DEBUG;
     }
 
-    Init(log_path, async, 10000, 8192, roll_size);
+    Init(log_path, async, max_queue_size, 8192, roll_size);
     
     // 设置初始化完成标志
     m_initialized_.store(true, std::memory_order_release);
@@ -281,15 +287,16 @@ void Logger::WorkerThread() {
     std::vector<std::string> batch_msgs;
     batch_msgs.reserve(32);
 
-    while (m_running_.load() || !m_queue_.empty()) {
+    while (m_running_.load() || !m_queue_ptr_->empty()) {
         batch_msgs.clear();
 
         // 批量出队（自旋锁保护，减少锁竞争次数）
         {
-            std::lock_guard lk(m_queue_lock_);
-            while (!m_queue_.empty() && batch_msgs.size() < 32) {
-                batch_msgs.emplace_back(std::move(m_queue_.front()));
-                m_queue_.pop_front();
+            std::string msg;
+            while (!m_queue_ptr_->empty() && batch_msgs.size() < 32) {
+                if (m_queue_ptr_->try_pop(msg)) {
+                    batch_msgs.emplace_back(msg);
+                }
             }
         } // 自动解锁
 
@@ -305,13 +312,12 @@ void Logger::WorkerThread() {
     }
 
     // 线程退出前刷空队列剩余日志
-    std::string remaining_msg;
     {
-        std::lock_guard lk(m_queue_lock_);
-        while (!m_queue_.empty()) {
-            remaining_msg = std::move(m_queue_.front());
-            m_queue_.pop_front();
-            Write(remaining_msg);
+        std::string remaining_msg;
+        while (!m_queue_ptr_->empty()) {
+            if (m_queue_ptr_->try_pop(remaining_msg)) {
+                Write(remaining_msg);
+            }
         }
     }
 }

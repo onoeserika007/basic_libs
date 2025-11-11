@@ -11,15 +11,17 @@
 #include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
-#include <iostream>
 #include <deque>
+#include <format>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
-#include <format>
 #include <sys/time.h>
+#include <thread>
+
+#include "lock_free_queue.h"
 
 // 简易自旋锁（基于C++20 std::atomic_flag，轻量无锁竞争）
 class SpinLock {
@@ -110,16 +112,14 @@ private:
     int m_today_; // 当前日期（tm_mday）
 
     // 异步队列与线程
-    std::deque<std::string> m_queue_;
-    SpinLock m_queue_lock_; // 轻量自旋锁，比std::mutex开销小 真的吗
+    std::unique_ptr<LockFreeQueue<std::string>> m_queue_ptr_;
     size_t m_max_queue_size_;
-    std::mutex m_queue_mutex_;
     std::thread m_worker_;
     std::atomic<bool> m_running_;
     bool m_is_async_;
 
     // batched flush
-    std::mutex m_file_mutex_;
+    SpinLock m_file_mutex_;
     std::string m_batch_buf_; // 批量写入缓冲区
     size_t m_batch_flush_threshold_; // 缓冲区阈值（超阈值则刷盘）
     int rotate_log_counter = 0;
@@ -163,14 +163,7 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
     // 异步模式：入队（自旋锁保护，轻量）
     if (m_is_async_) {
         // 队列满时自旋等待（匹配原逻辑）
-        while (true) {
-            {
-                std::lock_guard lk(m_queue_lock_);
-                if (m_queue_.size() < m_max_queue_size_) {
-                    m_queue_.emplace_back(std::move(final_msg));
-                    break;
-                }
-            }
+        while (!m_queue_ptr_->try_push(final_msg)) {
             if (!m_running_.load())
                 return;
             std::this_thread::yield(); // 避免CPU空转
