@@ -55,7 +55,7 @@ public:
     // 是否关闭日志（外部可读）
     bool IsClosed() const { return m_close_log_; }
 
-    std::string GetCurrentLogName() const { return m_current_name_; }
+    std::string GetCurrentLogName() const { return m_current_name_prefix_; }
 
     // 禁止拷贝
     Logger(const Logger &) = delete;
@@ -96,11 +96,12 @@ private:
     size_t m_rotate_bytes_;
     int m_close_log_;
     bool to_file_;
+    bool to_console_;
     bool m_realtime_ = true;
     LogLevel m_visible_log_level_; // 日志可见级别
 
     // runtime
-    std::string m_current_name_;
+    std::string m_current_name_prefix_;
 
     // 文件句柄与相关计数
     std::unique_ptr<std::ofstream> m_file_stream_;
@@ -121,6 +122,7 @@ private:
     std::mutex m_file_mutex_;
     std::string m_batch_buf_; // 批量写入缓冲区
     size_t m_batch_flush_threshold_; // 缓冲区阈值（超阈值则刷盘）
+    int rotate_log_counter = 0;
     
     // 初始化控制
     std::atomic<bool> m_initialized_{false};

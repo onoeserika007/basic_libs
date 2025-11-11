@@ -67,7 +67,6 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
             m_output_stream_ = m_file_stream_.get();
             std::cout << "Logger: successfully opened log file " << fname << std::endl;
         }
-        m_current_name_ = fname;
     }
 
     if (m_is_async_ && m_max_queue_size_ > 0) {
@@ -95,6 +94,9 @@ void Logger::InitFromConfig() {
     size_t roll_size = config_manager.get<size_t>("log.roll_size", 5000000);
     bool to_console = config_manager.get<bool>("log.to_console", true);
     bool to_file = config_manager.get<bool>("log.to_file", true);
+
+    to_file_ = to_file;
+    to_console_ = to_console;
 
     // 从配置管理器获取日志可见级别
     try {
@@ -186,7 +188,14 @@ std::string Logger::GenerateLogFileName() {
              current_tm.tm_year + 1900, current_tm.tm_mon + 1, current_tm.tm_mday, current_tm.tm_hour,
              current_tm.tm_min, current_tm.tm_sec);
 
-    return {filename_buf};
+    auto filename_prefix = std::string{filename_buf};
+    if (m_current_name_prefix_ == filename_prefix) {
+        rotate_log_counter++;
+    } else {
+        rotate_log_counter = 0;
+    }
+    m_current_name_prefix_ = filename_prefix;
+    return filename_prefix + "_" + std::to_string(rotate_log_counter);
 }
 
 void Logger::RotateIfNeeded() {
@@ -232,7 +241,6 @@ void Logger::RotateIfNeeded() {
         m_output_stream_ = m_file_stream_.get();
         std::cout << "Logger: successfully rotated to new log file " << fname << std::endl;
     }
-    m_current_name_ = fname;
     m_written_bytes_ = 0;
 }
 
@@ -255,13 +263,15 @@ void Logger::Write(const std::string &msg) {
                 m_file_stream_->flush();
             } else {
                 // 如果写入失败，输出错误信息到标准错误流
-                std::cerr << "Failed to write to log file: " << m_current_name_ << std::endl;
+                std::cerr << "Failed to write to log file: " << m_current_name_prefix_ << std::endl;
             }
         }
 
-        // 同时写到控制台（无论文件是否成功）
-        std::cout.write(m_batch_buf_.data(), m_batch_buf_.size());
-        std::cout.flush();
+        if (to_console_) {
+            // 同时写到控制台（无论文件是否成功）
+            std::cout.write(m_batch_buf_.data(), m_batch_buf_.size());
+            std::cout.flush();
+        }
 
         m_batch_buf_.clear(); // 清空缓冲区
     }
