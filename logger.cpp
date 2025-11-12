@@ -40,8 +40,8 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
     m_buf_size_ = buf_size;
     m_rotate_bytes_ = rotate_bytes;
 
-    m_queue_ptr_ = std::make_unique<LockFreeQueue<std::string>>(max_queue_size);
-
+    // m_queue_ptr_ = std::make_unique<LockFreeQueue<std::string>>(max_queue_size);
+    m_queue_ptr_ = std::make_unique<LockFreeLinkedList<std::string>>();
     if (to_file_) {
         // open file
         std::lock_guard lk(m_file_mutex_);
@@ -294,8 +294,8 @@ void Logger::WorkerThread() {
         {
             std::string msg;
             while (!m_queue_ptr_->empty() && batch_msgs.size() < 32) {
-                if (m_queue_ptr_->try_pop(msg)) {
-                    batch_msgs.emplace_back(msg);
+                if (auto msg_opt = m_queue_ptr_->pop_front_lockfree()) {
+                    batch_msgs.emplace_back(msg_opt.value());
                 }
             }
         } // 自动解锁
@@ -313,10 +313,9 @@ void Logger::WorkerThread() {
 
     // 线程退出前刷空队列剩余日志
     {
-        std::string remaining_msg;
         while (!m_queue_ptr_->empty()) {
-            if (m_queue_ptr_->try_pop(remaining_msg)) {
-                Write(remaining_msg);
+            if (auto msg_opt = m_queue_ptr_->pop_front_lockfree()) {
+                Write(msg_opt.value());
             }
         }
     }

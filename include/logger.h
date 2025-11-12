@@ -21,6 +21,7 @@
 #include <sys/time.h>
 #include <thread>
 
+#include "lock_free_link_queue.h"
 #include "lock_free_queue.h"
 
 // 简易自旋锁（基于C++20 std::atomic_flag，轻量无锁竞争）
@@ -112,7 +113,7 @@ private:
     int m_today_; // 当前日期（tm_mday）
 
     // 异步队列与线程
-    std::unique_ptr<LockFreeQueue<std::string>> m_queue_ptr_;
+    std::unique_ptr<LockFreeLinkedList<std::string>> m_queue_ptr_;
     size_t m_max_queue_size_;
     std::thread m_worker_;
     std::atomic<bool> m_running_;
@@ -163,11 +164,7 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
     // 异步模式：入队（自旋锁保护，轻量）
     if (m_is_async_) {
         // 队列满时自旋等待（匹配原逻辑）
-        while (!m_queue_ptr_->try_push(final_msg)) {
-            if (!m_running_.load())
-                return;
-            std::this_thread::yield(); // 避免CPU空转
-        }
+        m_queue_ptr_->push_back_lockfree(final_msg);
     } else {
         // 同步模式：直接写入
         Write(final_msg);
