@@ -20,6 +20,7 @@
 #include <string>
 #include <sys/time.h>
 #include <thread>
+#include "concurrentqueue.h"
 
 #include "lock_free_link_queue.h"
 #include "lock_free_queue.h"
@@ -113,7 +114,7 @@ private:
     int m_today_; // 当前日期（tm_mday）
 
     // 异步队列与线程
-    std::unique_ptr<LockFreeLinkedList<std::string>> m_queue_ptr_;
+    std::unique_ptr<moodycamel::ConcurrentQueue<std::string>> m_queue_ptr_;
     size_t m_max_queue_size_;
     std::thread m_worker_;
     std::atomic<bool> m_running_;
@@ -164,7 +165,7 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
     // 异步模式：入队（自旋锁保护，轻量）
     if (m_is_async_) {
         // 队列满时自旋等待（匹配原逻辑）
-        m_queue_ptr_->push_back_lockfree(final_msg);
+        m_queue_ptr_->enqueue(final_msg);
     } else {
         // 同步模式：直接写入
         Write(final_msg);

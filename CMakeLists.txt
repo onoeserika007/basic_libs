@@ -21,6 +21,11 @@ target_include_directories(base_lib
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+target_include_directories(base_lib
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/private
+)
+
 # Link with jsoncpp and pthread
 target_link_libraries(base_lib 
     PUBLIC 

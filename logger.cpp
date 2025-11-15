@@ -41,7 +41,7 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
     m_rotate_bytes_ = rotate_bytes;
 
     // m_queue_ptr_ = std::make_unique<LockFreeQueue<std::string>>(max_queue_size);
-    m_queue_ptr_ = std::make_unique<LockFreeLinkedList<std::string>>();
+    m_queue_ptr_ = std::make_unique<moodycamel::ConcurrentQueue<std::string>>();
     if (to_file_) {
         // open file
         std::lock_guard lk(m_file_mutex_);
@@ -158,7 +158,7 @@ std::string Logger::MakeTimePrefix(struct timeval tv, LogLevel level) {
     time_t t = tv.tv_sec;
     struct tm tm_now;
     localtime_r(&t, &tm_now); // Replaced localtime with thread-safe localtime_r (POSIX)
-    char buf[64];
+    char buf[1024];
     const char *lvl = "[INFO]:";
     switch (level) {
         case LogLevel::DEBUG:
@@ -287,15 +287,15 @@ void Logger::WorkerThread() {
     std::vector<std::string> batch_msgs;
     batch_msgs.reserve(32);
 
-    while (m_running_.load() || !m_queue_ptr_->empty()) {
+    while (m_running_.load() || m_queue_ptr_->size_approx() > 0) {
         batch_msgs.clear();
 
         // 批量出队（自旋锁保护，减少锁竞争次数）
         {
             std::string msg;
-            while (!m_queue_ptr_->empty() && batch_msgs.size() < 32) {
-                if (auto msg_opt = m_queue_ptr_->pop_front_lockfree()) {
-                    batch_msgs.emplace_back(msg_opt.value());
+            while (m_queue_ptr_->size_approx() > 0 && batch_msgs.size() < 32) {
+                if (m_queue_ptr_->try_dequeue(msg)) {
+                    batch_msgs.emplace_back(msg);
                 }
             }
         } // 自动解锁
@@ -313,9 +313,10 @@ void Logger::WorkerThread() {
 
     // 线程退出前刷空队列剩余日志
     {
-        while (!m_queue_ptr_->empty()) {
-            if (auto msg_opt = m_queue_ptr_->pop_front_lockfree()) {
-                Write(msg_opt.value());
+        std::string msg;
+        while (m_queue_ptr_->size_approx() > 0) {
+            if (m_queue_ptr_->try_dequeue(msg)) {
+                Write(msg);
             }
         }
     }
