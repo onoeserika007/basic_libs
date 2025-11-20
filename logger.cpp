@@ -3,8 +3,8 @@
 //
 
 
-#include "logger.h"
-#include "config_manager.h"
+#include "serika/basic/logger.h"
+#include "serika/basic/config_manager.h"
 
 #include <cstring>
 #include <ctime>
@@ -158,8 +158,7 @@ std::string Logger::MakeTimePrefix(struct timeval tv, LogLevel level) {
     time_t t = tv.tv_sec;
     struct tm tm_now;
     localtime_r(&t, &tm_now); // Replaced localtime with thread-safe localtime_r (POSIX)
-    char buf[1024];
-    const char *lvl = "[INFO]:";
+    std::string_view lvl = "[INFO]:";
     switch (level) {
         case LogLevel::DEBUG:
             lvl = "[DEBUG]:";
@@ -174,10 +173,18 @@ std::string Logger::MakeTimePrefix(struct timeval tv, LogLevel level) {
             lvl = "[ERROR]:";
             break;
     }
-    int len =
-            snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%06ld %s ", tm_now.tm_year + 1900,
-                     tm_now.tm_mon + 1, tm_now.tm_mday, tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec, tv.tv_usec, lvl);
-    return std::string(buf, (len > 0 ? len : 0));
+
+    return std::format(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06} {}",
+        tm_now.tm_year + 1900,
+        tm_now.tm_mon + 1,
+        tm_now.tm_mday,
+        tm_now.tm_hour,
+        tm_now.tm_min,
+        tm_now.tm_sec,
+        tv.tv_usec,
+        lvl
+    );
 }
 
 std::string Logger::GenerateLogFileName() {
