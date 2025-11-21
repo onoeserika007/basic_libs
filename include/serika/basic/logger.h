@@ -173,6 +173,8 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
         // 同步模式：直接写入
         Write(final_msg);
     }
+
+    queue_cv_.notify_one();
 }
 
 //
