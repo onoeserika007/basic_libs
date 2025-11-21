@@ -41,7 +41,8 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
     m_rotate_bytes_ = rotate_bytes;
 
     // m_queue_ptr_ = std::make_unique<LockFreeQueue<std::string>>(max_queue_size);
-    m_queue_ptr_ = std::make_unique<moodycamel::ConcurrentQueue<std::string>>();
+    // m_queue_ptr_ = std::make_unique<moodycamel::ConcurrentQueue<std::string>>();
+    m_queue_ptr_ = std::make_unique<std::queue<std::string>>();
     if (to_file_) {
         // open file
         std::lock_guard lk(m_file_mutex_);
@@ -82,7 +83,7 @@ bool Logger::Init(std::string file_name, bool async, size_t max_queue_size, size
 
 void Logger::InitFromConfig() {
     std::lock_guard lock(m_init_mutex_);
-    
+
     // 双重检查锁定
     if (m_initialized_.load(std::memory_order_acquire)) {
         return;
@@ -125,7 +126,7 @@ void Logger::InitFromConfig() {
     }
 
     Init(log_path, async, max_queue_size, 8192, roll_size);
-    
+
     // 设置初始化完成标志
     m_initialized_.store(true, std::memory_order_release);
 }
@@ -294,18 +295,15 @@ void Logger::WorkerThread() {
     std::vector<std::string> batch_msgs;
     batch_msgs.reserve(32);
 
-    while (m_running_.load() || m_queue_ptr_->size_approx() > 0) {
+    while (m_running_.load() || !m_queue_ptr_->empty()) {
         batch_msgs.clear();
 
-        // 批量出队（自旋锁保护，减少锁竞争次数）
-        {
-            std::string msg;
-            while (m_queue_ptr_->size_approx() > 0 && batch_msgs.size() < 32) {
-                if (m_queue_ptr_->try_dequeue(msg)) {
-                    batch_msgs.emplace_back(msg);
-                }
-            }
-        } // 自动解锁
+        std::unique_lock latch {queue_mu_};
+        while (!m_queue_ptr_->empty() && batch_msgs.size() < 32) {
+            std::string msg = m_queue_ptr_->front();
+            m_queue_ptr_->pop();
+            batch_msgs.emplace_back(msg);
+        }
 
         // 批量写入文件（复用批量刷盘逻辑）
         if (!batch_msgs.empty()) {
@@ -314,17 +312,24 @@ void Logger::WorkerThread() {
             }
         } else {
             // 无日志时yield CPU，减少空转消耗
-            std::this_thread::yield();
+            queue_cv_.wait(latch, [this]() { return !m_running_.load() || !m_queue_ptr_->empty(); });
         }
     }
 
     // 线程退出前刷空队列剩余日志
     {
         std::string msg;
-        while (m_queue_ptr_->size_approx() > 0) {
-            if (m_queue_ptr_->try_dequeue(msg)) {
-                Write(msg);
-            }
+        // while (m_queue_ptr_->size_approx() > 0) {
+        //     if (m_queue_ptr_->try_dequeue(msg)) {
+        //         Write(msg);
+        //     }
+        // }
+
+        std::unique_lock latch {queue_mu_};
+
+        while (!m_queue_ptr_->empty()) {
+            msg = m_queue_ptr_->front();
+            Write(msg);
         }
     }
 }

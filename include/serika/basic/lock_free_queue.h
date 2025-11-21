@@ -57,7 +57,7 @@ public:
         new (&slot.storage) T(std::move(value));
 
         // 推进尾指针
-        tail_.store(next, std::memory_order_release);
+        tail_.compare_exchange_strong(tail, next, std::memory_order_release, std::memory_order_relaxed);
         return true;
     }
 
@@ -72,11 +72,11 @@ public:
     bool try_pop(T& out_value) {
         size_t head = head_.load(std::memory_order_relaxed);
 
-        // 检查是否为空
-        if (head == tail_.load(std::memory_order_acquire))
-            return false;
-
         Slot& slot = buffer_[head];
+
+        // 检查是否为空
+        if (head == tail_.load(std::memory_order_acquire) && !slot.occupied.load(std::memory_order_acquire))
+            return false;
 
         if (!slot.occupied.load(std::memory_order_acquire))
             return false;
@@ -89,7 +89,7 @@ public:
         slot.occupied.store(false, std::memory_order_release);
 
         // 推进头指针
-        head_.store(next_index(head), std::memory_order_release);
+        head_.compare_exchange_strong(next_index(head), std::memory_order_release, std::memory_order_relaxed);
         return true;
     }
 

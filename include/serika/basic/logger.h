@@ -20,8 +20,9 @@
 #include <string>
 #include <sys/time.h>
 #include <thread>
+#include <queue>
 
-#include "serika/basic/concurrentqueue.h"
+#include "lock_free_queue.h"
 
 // 简易自旋锁（基于C++20 std::atomic_flag，轻量无锁竞争）
 class SpinLock {
@@ -112,7 +113,10 @@ private:
     int m_today_; // 当前日期（tm_mday）
 
     // 异步队列与线程
-    std::unique_ptr<moodycamel::ConcurrentQueue<std::string>> m_queue_ptr_;
+    // std::unique_ptr<LockFreeQueue<std::string>> m_queue_ptr_;
+    std::unique_ptr<std::queue<std::string>> m_queue_ptr_;
+    std::mutex queue_mu_;
+    std::condition_variable queue_cv_;
     size_t m_max_queue_size_;
     std::thread m_worker_;
     std::atomic<bool> m_running_;
@@ -123,7 +127,7 @@ private:
     std::string m_batch_buf_; // 批量写入缓冲区
     size_t m_batch_flush_threshold_; // 缓冲区阈值（超阈值则刷盘）
     int rotate_log_counter = 0;
-    
+
     // 初始化控制
     std::atomic<bool> m_initialized_{false};
     std::mutex m_init_mutex_;
@@ -161,7 +165,11 @@ void Logger::Log(LogLevel level, const char *fmt, Args &&...args) {
     std::string final_msg = std::format("{}{}\n", time_prefix, formatted_msg);
 
     if (m_is_async_) {
-        m_queue_ptr_->enqueue(final_msg);
+        std::unique_lock latch {queue_mu_};
+        // while (!m_queue_ptr_->try_push(final_msg)) {
+        //     std::this_thread::yield();
+        // }
+        m_queue_ptr_->push(final_msg);
     } else {
         // 同步模式：直接写入
         Write(final_msg);
