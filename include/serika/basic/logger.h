@@ -22,7 +22,6 @@
 #include <thread>
 #include <queue>
 
-#include "lock_free_queue.h"
 
 // 简易自旋锁（基于C++20 std::atomic_flag，轻量无锁竞争）
 class SpinLock {
